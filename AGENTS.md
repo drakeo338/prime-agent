@@ -10,7 +10,9 @@ Every contributor (human or agent) must read this before working on this repo.
   `gh pr create --repo PrimeIntellect-ai/prime-agent --base rust`.
 - CI runs on the org's billing: `.github/workflows/continuous.yml` + `release.yml` on the
   `rust` branch.
-- Parity ground truth is unchanged: the TS checkout at ~/prime-agent (read-only).
+- Parity ground truth is unchanged: a read-only checkout of the TS implementation (this
+  repo's `main` branch). Clone it to `~/prime-agent`, the conventional location the parity
+  scripts and code fall back to; tooling that honors an override reads `PA_TS_REFERENCE`.
 
 ## Style and structure
 
