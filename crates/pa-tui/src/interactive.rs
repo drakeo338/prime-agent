@@ -97,6 +97,15 @@ mod tests;
 pub enum SessionSelection {
     /// Create a fresh session (`create`, then `attach`).
     New,
+    /// Create a fresh session bound under a parent session (the scoped
+    /// agents view's new action): the create records `parent_session_file`
+    /// as the session's `parentSessionPath` and runs it at `rlm_depth`
+    /// (one below the parent), so every roster surface nests it under the
+    /// parent.
+    NewChild {
+        parent_session_file: PathBuf,
+        rlm_depth: u32,
+    },
     /// Attach an existing live session by active session id.
     Attach(String),
     /// Create with `sessionPath`: reopen a saved session file (`--resume`).
@@ -182,6 +191,10 @@ pub trait InteractionTelemetry: Send + Sync {
         &self,
         children_total: u64,
     ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+    /// The scoped agents view's new action created a session under the
+    /// scope root (`tui agents new scoped`): `depth` is the new session's
+    /// RLM depth.
+    fn scoped_agent_created(&self, depth: u32) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
     /// An actionable activity group was opened; never includes command or goal text.
     fn activity_opened(&self, kind: &'static str) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
     /// A menu surface opened (event `tui menu opened`): `menu` names the
@@ -413,6 +426,14 @@ impl InteractiveOptions {
         }
         if let Some(thinking) = self.model_selection.thinking {
             config["thinking"] = json!(thinking.wire_name());
+        }
+        if let SessionSelection::NewChild {
+            parent_session_file,
+            rlm_depth,
+        } = &self.session
+        {
+            config["parentSessionPath"] = json!(parent_session_file.to_string_lossy());
+            config["rlmDepth"] = json!(rlm_depth);
         }
         config
     }
