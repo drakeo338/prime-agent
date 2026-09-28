@@ -38,8 +38,8 @@ impl AgentsViewMode {
             "agents".to_string(),
             format!("{running} running, {idle} idle, {inactive} inactive"),
         )];
-        if let Some(depth) = self.scope_depth {
-            extra_metadata.push(("depth".to_string(), depth.to_string()));
+        if let Some(root) = &self.scope_root {
+            extra_metadata.push(("depth".to_string(), root.child_depth.to_string()));
         }
         let chrome = crate::chrome::ChromeState {
             version: self.options.version.clone(),
