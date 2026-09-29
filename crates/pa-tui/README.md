@@ -19,7 +19,8 @@ and the list window follows the selection (TS `renderSessionRows`: the
 slice centers on the selected row and clips the overflow behind
 leading/trailing ellipses, so arrowing below the fold keeps the
 selection on-screen instead of the view snapping back to the top of the
-list).
+list; rows carry their session's `◷ N` heartbeat count from the
+`heartbeats_list` catalog, refreshed on `heartbeats_changed`).
 
 ## Non-goals
 No session logic, no providers, no loop policy. The interactive UI renders daemon events and sends user intents (prompts, abort, switch) as daemon commands; the session loop itself lives in the pa-daemon worker. It never computes agent behavior and never spawns the supervisor (launch semantics live in pa-cli).
