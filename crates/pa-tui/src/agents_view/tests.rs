@@ -59,6 +59,7 @@ fn mode_with_row(title: &str, model: &str) -> (AgentsViewMode, usize) {
         expanded: false,
         parent_identity: None,
         kind: RowKind::Agent,
+        has_spawn_code: false,
     };
     mode.rows = vec![row("holder"), row(title)];
     (mode, 1)
