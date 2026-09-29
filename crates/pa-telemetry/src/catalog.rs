@@ -1683,6 +1683,7 @@ const UPDATE_EVENTS: &[EventRule] = &[
 
 /// Every catalogued event, flattened. `AGENT_ERROR` et al. are the #2117 v2
 /// events; the v1 adoption events follow.
+#[must_use]
 pub fn catalog() -> Vec<&'static EventRule> {
     let mut all: Vec<&'static EventRule> = vec![
         &AGENT_STARTED,
@@ -1715,6 +1716,7 @@ pub fn catalog() -> Vec<&'static EventRule> {
 }
 
 /// Look up one event's rule.
+#[must_use]
 pub fn lookup(name: &str) -> Option<&'static EventRule> {
     catalog().into_iter().find(|rule| rule.name == name)
 }
