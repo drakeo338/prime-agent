@@ -372,33 +372,46 @@ fn activity_dock_selection_is_the_purple_opaque_bold_band() {
         .style
         .add_modifier
         .contains(Modifier::BOLD));
-    // The band rides exactly the selected group: the other groups
-    // and the separators between them carry no band.
+    // The band and the bold ride exactly the selected group: the
+    // other groups, the in-row separators, and the key hint carry
+    // neither mark.
     let selected = ["\u{25f7} 3 heartbeats", " \u{b7} ", "\u{25d0} 1 paused"];
-    for span in row {
-        assert_eq!(
-            span.style.bg == band.bg,
-            selected.contains(&span.content.as_str()),
-            "the band rides exactly the selected group: {:?}",
-            span.content
-        );
-    }
-    // The band is a focus-owned signal: the same dock without focus
-    // renders no band at all.
+    let banded: Vec<&str> = row
+        .iter()
+        .filter(|span| span.style.bg == band.bg)
+        .map(|span| span.content.as_str())
+        .collect();
+    assert_eq!(
+        banded, selected,
+        "the band rides exactly the selected group"
+    );
+    let bold: Vec<&str> = row
+        .iter()
+        .filter(|span| span.style.add_modifier.contains(Modifier::BOLD))
+        .map(|span| span.content.as_str())
+        .collect();
+    assert_eq!(bold, selected, "the bold rides exactly the selected group");
+    // The band and the hint are focus-owned signals: the same dock
+    // without focus renders neither.
     let unfocused = ActivityDock {
         focused: false,
         ..dock
     };
     let frame = render_activity_dock(&unfocused, &theme, 120);
     assert!(frame[1].iter().all(|span| span.style.bg.is_none()));
+    let text = frame[1]
+        .iter()
+        .map(|span| span.content.as_str())
+        .collect::<String>();
+    assert!(!text.contains('\u{21e5}'));
 }
 
-/// The arrows never skip an empty group (the operator's 2026-09-26
+/// Tab never skips an empty group (the operator's 2026-09-26
 /// muscle-memory directive): one press steps to the neighboring
 /// rendered group and wraps, so every group is visited in order
 /// in both directions and N groups take exactly N presses to cycle.
 #[test]
-fn dock_arrows_visit_every_group_even_when_empty() {
+fn dock_tab_visits_every_group_even_when_empty() {
     // The all-zero dock: the heartbeats and shells groups are empty
     // and stay in the cycle.
     let dock = ActivityDock::default();
@@ -410,7 +423,7 @@ fn dock_arrows_visit_every_group_even_when_empty() {
             ActivityGroup::Bash,
         ]
     );
-    // Right: the neighbors in order, the empty groups included,
+    // Tab: the neighbors in order, the empty groups included,
     // wrapping back to the first.
     assert_eq!(
         dock.step(ActivityGroup::Subagents, ActivityDirection::Next),
@@ -425,7 +438,7 @@ fn dock_arrows_visit_every_group_even_when_empty() {
         ActivityGroup::Subagents,
         "the cycle wraps past the last group"
     );
-    // Left: the same groups in reverse, wrapping past the first.
+    // Shift+Tab: the same groups in reverse, wrapping past the first.
     assert_eq!(
         dock.step(ActivityGroup::Subagents, ActivityDirection::Prev),
         ActivityGroup::Bash,
@@ -460,7 +473,7 @@ fn dock_arrows_visit_every_group_even_when_empty() {
 /// changes only the rendered counts, never the group order, the
 /// neighbors, or the press count.
 #[test]
-fn dock_arrows_visit_the_same_groups_with_items() {
+fn dock_tab_visits_the_same_groups_with_items() {
     let dock = ActivityDock {
         subagents_running_direct: 1,
         subagents_running_nested: 2,
@@ -479,7 +492,7 @@ fn dock_arrows_visit_the_same_groups_with_items() {
             ActivityGroup::Goal,
         ]
     );
-    // The full cycle right: every group in order, the goal group
+    // The full Tab cycle: every group in order, the goal group
     // included, back to the start in four presses.
     let mut walked = ActivityGroup::Subagents;
     for expected in [
@@ -491,7 +504,7 @@ fn dock_arrows_visit_the_same_groups_with_items() {
         walked = dock.step(walked, ActivityDirection::Next);
         assert_eq!(walked, expected);
     }
-    // The full cycle left mirrors it exactly.
+    // The full Shift+Tab cycle mirrors it exactly.
     let mut walked = ActivityGroup::Subagents;
     for expected in [
         ActivityGroup::Goal,
@@ -535,9 +548,10 @@ fn dock_goal_group_unmounts_with_its_row() {
 /// band — the ONE shared purple selection style — rides the group's
 /// zero-count segment on the row — the dock-level empty state is
 /// the zero readout itself (the view the group opens carries the
-/// pane's own empty-state row).
+/// pane's own empty-state row) — and the focused row carries the
+/// right-aligned key hint, which drops whole when it does not fit.
 #[test]
-fn dock_renders_the_focused_empty_group() {
+fn dock_renders_the_focused_empty_group_with_the_key_hint() {
     let theme = Theme::builtin("prime", ColorMode::TrueColor);
     let dock = ActivityDock {
         selected: ActivityGroup::Heartbeats,
@@ -549,7 +563,23 @@ fn dock_renders_the_focused_empty_group() {
         .iter()
         .map(|span| span.content.as_str())
         .collect::<String>();
-    assert_eq!(text, " ◆ 0 subagents  ·  ◷ 0 heartbeats  ·  ▸ 0 shells");
+    assert_eq!(
+        text,
+        format!(
+            " ◆ 0 subagents  ·  ◷ 0 heartbeats  ·  ▸ 0 shells{}⇥ switch · → open",
+            " ".repeat(35)
+        )
+    );
+    // The hint renders in the tray's `← manage` vocabulary: dim
+    // glyphs, muted words, the dim `·` separator.
+    let hint = [
+        theme.fg_span(ThemeColor::Dim, "⇥"),
+        theme.fg_span(ThemeColor::Muted, " switch"),
+        theme.fg_span(ThemeColor::Dim, " · "),
+        theme.fg_span(ThemeColor::Dim, "→"),
+        theme.fg_span(ThemeColor::Muted, " open"),
+    ];
+    assert_eq!(frame[1][frame[1].len() - hint.len()..], hint);
     // The selection's band rides exactly the entered empty group's
     // zero readout, which keeps its own muted color and gains the
     // shared style's bold (the selection never repaints the text).
@@ -562,6 +592,14 @@ fn dock_renders_the_focused_empty_group() {
     assert_eq!(heartbeat.style.bg, band.bg);
     assert_eq!(heartbeat.style.fg, muted);
     assert!(heartbeat.style.add_modifier.contains(Modifier::BOLD));
+    // A width that cannot spare two columns plus the hint drops it
+    // whole: the row renders exactly the groups, untruncated.
+    let frame = render_activity_dock(&dock, &theme, 60);
+    let text = frame[1]
+        .iter()
+        .map(|span| span.content.as_str())
+        .collect::<String>();
+    assert_eq!(text, " ◆ 0 subagents  ·  ◷ 0 heartbeats  ·  ▸ 0 shells");
 }
 
 /// The `/speed` footer row (TS `FooterComponent::render`): one dim row
