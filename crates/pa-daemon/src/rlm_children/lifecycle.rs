@@ -2,13 +2,13 @@
 //! prompt/kill/close routing, settle watching with its notices, and the
 //! spawn-admission outbox types (`CreatedSessionIds`, `CreatedChild`).
 use super::{
-    anyhow, compact_rlm_text, create_rlm_child_terminal_notice, json, now_ms, Arc,
-    ChildCloseReason, ChildRecord, Context, DaemonCommand, DaemonSessionLifecycle, Duration, Map,
-    Mutex, ParentIdentity, Path, PromptInput, Result, RlmChildTerminalNotice,
-    SupervisorChildSessionsInner, Value, CREATE_TIMEOUT_MS, IDLE_WAIT_GRACE_MS, KILL_TIMEOUT_MS,
-    NOTICE_DELIVERY_TIMEOUT_MS, PROMPT_TIMEOUT_MS, RUNTIME_METADATA_PROMPT_MAX, STATE_TIMEOUT_MS,
-    WATCH_MAX_UNREACHABLE_POLLS, WATCH_POLL_INTERVAL_MS, WATCH_SETTLE_GRACE_MS,
-    WATCH_WAIT_SLICE_MS,
+    anyhow, compact_rlm_text, create_rlm_child_failure_message, create_rlm_child_terminal_notice,
+    json, now_ms, Arc, ChildCloseReason, ChildRecord, Context, CustomMessage, DaemonCommand,
+    DaemonSessionLifecycle, Duration, Map, Mutex, ParentIdentity, Path, PromptInput, Result,
+    RlmChildTerminalNotice, SupervisorChildSessionsInner, Value, CREATE_TIMEOUT_MS,
+    IDLE_WAIT_GRACE_MS, KILL_TIMEOUT_MS, NOTICE_DELIVERY_TIMEOUT_MS, PROMPT_TIMEOUT_MS,
+    RUNTIME_METADATA_PROMPT_MAX, STATE_TIMEOUT_MS, WATCH_MAX_UNREACHABLE_POLLS,
+    WATCH_POLL_INTERVAL_MS, WATCH_SETTLE_GRACE_MS, WATCH_WAIT_SLICE_MS,
 };
 
 /// Parsed ids of one created child session.
@@ -44,7 +44,7 @@ impl CreatedChild {
 
 /// The plain text of a custom row's content (the notice turn's model
 /// prompt); `None` for non-text content shapes.
-fn custom_message_text(message: &pa_types::session::CustomMessage) -> Option<String> {
+fn custom_message_text(message: &CustomMessage) -> Option<String> {
     match &message.content {
         pa_types::ai::UserContent::Text(text) => Some(text.clone()),
         pa_types::ai::UserContent::Blocks(_) => None,
@@ -444,19 +444,11 @@ impl SupervisorChildSessionsInner {
             } else {
                 unreachable_polls += 1;
                 if unreachable_polls >= WATCH_MAX_UNREACHABLE_POLLS {
-                    {
-                        let mut state = record.lock().await;
-                        if !should_mark_unreachable_error(&state) {
-                            return;
-                        }
-                        state.settled_status = Some("error");
-                        state.error = Some("Child worker unreachable".to_string());
-                    }
                     // A dead child keeps whatever rows its file already
                     // holds; capture them before the terminal notice.
                     self.emit_child_usage(record).await;
-                    self.deliver_settle_notice(record).await;
-                    self.fire_settle_hook();
+                    self.settle_failed(record, "Child worker unreachable".to_string())
+                        .await;
                     return;
                 }
             }
@@ -469,19 +461,48 @@ impl SupervisorChildSessionsInner {
     /// notice claim collapses the races between the watcher, a natural
     /// settle during `delete_subagent`, and the delete path itself.
     async fn deliver_settle_notice(&self, record: &Arc<Mutex<ChildRecord>>) {
-        let notice = {
+        let message = {
             let mut record = record.lock().await;
             if record.notice_delivered || record.replied_since_task {
                 return;
             }
             record.notice_delivered = true;
-            RlmChildTerminalNotice::CompletedWithoutReply {
+            let notice = RlmChildTerminalNotice::CompletedWithoutReply {
                 child_id: record.rlm_child_id.clone(),
                 session_name: record.session_name.clone(),
                 last_assistant_text_preview: record.answer_preview.clone(),
-            }
+            };
+            create_rlm_child_terminal_notice(&notice, now_ms())
         };
-        self.deliver_terminal_notice(&notice).await;
+        self.deliver_terminal_notice(message).await;
+    }
+
+    /// Settle one child as failed (TS's thrown-run arm): the record
+    /// settles `error` with its failure text and the parent receives the
+    /// `rlm_child_failure` row — whether or not the child replied — then
+    /// the settle hook fires like TS's `finally` resume. Exactly-once: the
+    /// claim (`should_mark_unreachable_error`) collapses the races with
+    /// the watcher and the delete path, and an already-settled child
+    /// keeps its verdict.
+    pub(super) async fn settle_failed(&self, record: &Arc<Mutex<ChildRecord>>, error: String) {
+        let message = {
+            let mut record = record.lock().await;
+            if !should_mark_unreachable_error(&record) {
+                return;
+            }
+            record.settled_status = Some("error");
+            record.notice_delivered = true;
+            let message = create_rlm_child_failure_message(
+                &record.rlm_child_id,
+                &record.session_name,
+                &error,
+                now_ms(),
+            );
+            record.error = Some(error);
+            message
+        };
+        self.deliver_terminal_notice(message).await;
+        self.fire_settle_hook();
     }
 
     /// Deliver one terminal notice into the parent session: the notice rides
@@ -494,8 +515,7 @@ impl SupervisorChildSessionsInner {
     /// reserved-kind row exclusively with a live mint, and answers
     /// anything a caller sends — with or without a guessed nonce —
     /// loudly instead.
-    pub(super) async fn deliver_terminal_notice(&self, notice: &RlmChildTerminalNotice) {
-        let message = create_rlm_child_terminal_notice(notice, now_ms());
+    pub(super) async fn deliver_terminal_notice(&self, message: CustomMessage) {
         let Some(content) = custom_message_text(&message) else {
             eprintln!("pa-daemon: RLM child notice carried no text content");
             return;
@@ -531,7 +551,8 @@ impl SupervisorChildSessionsInner {
     }
 }
 
-/// Whether the unreachable-poller may re-score a child as an error: a
+/// Whether a child may still settle as an error (the `settle_failed`
+/// claim, shared by the prompt-route and unreachable paths): a
 /// parent-closed child, a noticed child, or an ALREADY-SETTLED child
 /// keeps its POSITIVE verdict — its worker leaving afterward (the idle
 /// passivation's graceful stop, a crash after settle, or a give-up) is
